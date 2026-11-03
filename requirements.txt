@@ -1,0 +1,8 @@
+﻿aiohttp
+pyarrow
+pandas
+sqlalchemy
+psycopg2-binary
+huggingface_hub
+python-dotenv
+pytest
