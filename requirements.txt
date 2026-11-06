@@ -6,3 +6,4 @@ psycopg2-binary
 huggingface_hub
 python-dotenv
 pytest
+psutil
