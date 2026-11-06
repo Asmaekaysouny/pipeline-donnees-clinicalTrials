@@ -30,7 +30,7 @@
 - Listes (conditions, pays, phases) dédupliquées et triées
 - Doublons sur l'identifiant NCT supprimés
 - Études sans identifiant ou sans titre écartées
-- Date de traitement des données par ClinicalTrials.gov : (à noter)
+- Date de traitement des données par ClinicalTrials.gov : remplie à la collecte complète (champ data_timestamp de data/raw/_manifest.json)
 
 ## Transformation
 - Durée :
@@ -41,3 +41,36 @@
 ## Base SQL
 - Temps avant index :
 - Temps après index :
+
+## API (mesuré le 2026-11-03 à 14h25)
+- Études dans toute la base : 610 050
+- Études "breast cancer" : 16 983
+- pageSize maximal : 1000 (au-delà, tronqué sans erreur)
+- Durée d'une page de 10 / 100 / 1000 études : 0,39 s / 0,84 s / 1,86 s
+- Poids moyen d'une étude : environ 19 ko
+- Volume brut estimé : environ 11,7 Go pour toute la base, environ 325 Mo pour "breast cancer"
+- Chaque requête a un coût fixe d'environ 0,3 à 0,4 s : d'où le choix de pageSize=1000
+- La base grandit en continu : 16 983 études "breast cancer" le 03/11, 16 995 le 06/11
+
+## Partitionnement (mesuré le 2026-11-06)
+
+| | Par statut | Par année de début |
+| --- | --- | --- |
+| Partitions | 14 | 30 |
+| Requêtes au total | 26 | 35 |
+| Partition la plus lente | COMPLETED (7 787 études, 8 pages) | 2022 à 2026 (environ 1 000 à 1 100 études, 2 pages) |
+| Somme = total (16 995) | OK | OK |
+
+Choix : par année de début (+ avant 2000, après 2026, sans date).
+- Partitions équilibrées : 2 pages au maximum, contre 8 pour COMPLETED (46 % des études).
+- La date de début ne change pas pendant la collecte, contrairement au statut.
+
+## Ingestion
+- Date de traitement des données par ClinicalTrials.gov :
+- Durée de la collecte complète :
+- Nombre de requêtes :
+- Nombre d'études collectées :
+- Volume de data/raw/ :
+- Nombre de retries :
+- Durée en séquentiel (échantillon) :
+- Gain de l'asynchrone :
