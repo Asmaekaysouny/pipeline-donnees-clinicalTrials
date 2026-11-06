@@ -1,11 +1,14 @@
 """Ingestion asynchrone des études ClinicalTrials.gov.
 
-Brique B1 : un seul appel asynchrone, pour une partition.
+Brique B2 : pagination d'une partition et écriture en JSON Lines.
 """
 from __future__ import annotations
 
 import asyncio
+import json
+import os
 import time
+from pathlib import Path
 
 import aiohttp
 
@@ -13,6 +16,7 @@ BASE_URL = "https://clinicaltrials.gov/api/v2/studies"
 CONDITION = "breast cancer"
 PAGE_SIZE = 1000
 TIMEOUT = aiohttp.ClientTimeout(total=60)
+RAW_DIR = Path(__file__).resolve().parents[2] / "data" / "raw"
 
 
 def filtre_partition(partition: str) -> str:
@@ -24,6 +28,21 @@ def filtre_partition(partition: str) -> str:
     if partition == "sans_date":
         return "AREA[StartDate]MISSING"
     return f"AREA[StartDate]RANGE[{partition}-01-01,{partition}-12-31]"
+
+
+def nom_fichier(partition: str, numero: int) -> Path:
+    """Chemin déterministe d'une page : data/raw/2025_page_00001.jsonl."""
+    return RAW_DIR / f"{partition}_page_{numero:05d}.jsonl"
+
+
+def ecrire_page(chemin: Path, etudes: list[dict]) -> None:
+    """Écrit une étude par ligne, via un fichier temporaire renommé à la fin."""
+    chemin.parent.mkdir(parents=True, exist_ok=True)
+    temporaire = chemin.with_suffix(".jsonl.tmp")
+    with temporaire.open("w", encoding="utf-8") as fichier:
+        for etude in etudes:
+            fichier.write(json.dumps(etude, ensure_ascii=False) + "\n")
+    os.replace(temporaire, chemin)
 
 
 async def recuperer_page(
@@ -43,17 +62,31 @@ async def recuperer_page(
         return await reponse.json()
 
 
+async def collecter_partition(session: aiohttp.ClientSession, partition: str) -> int:
+    """Suit les jetons d'une partition jusqu'à la dernière page. Renvoie le nombre d'études."""
+    numero = 1
+    page_token = None
+    total = 0
+    while True:
+        donnees = await recuperer_page(session, partition, page_token)
+        etudes = donnees["studies"]
+        chemin = nom_fichier(partition, numero)
+        ecrire_page(chemin, etudes)
+        total += len(etudes)
+        print(f"  {chemin.name} : {len(etudes)} études")
+        page_token = donnees.get("nextPageToken")
+        if not page_token:
+            return total
+        numero += 1
+
+
 async def main() -> None:
     async with aiohttp.ClientSession(timeout=TIMEOUT) as session:
-        for partition in ("2020", "2025"):
+        for partition in ("2025", "2020"):
             debut = time.perf_counter()
-            donnees = await recuperer_page(session, partition)
+            total = await collecter_partition(session, partition)
             duree = time.perf_counter() - debut
-            print(
-                f"{partition} : {donnees['totalCount']} études au total, "
-                f"{len(donnees['studies'])} reçues en {duree:.2f} s, "
-                f"page suivante : {'oui' if 'nextPageToken' in donnees else 'non'}"
-            )
+            print(f"{partition} : {total} études en {duree:.2f} s")
 
 
 if __name__ == "__main__":
