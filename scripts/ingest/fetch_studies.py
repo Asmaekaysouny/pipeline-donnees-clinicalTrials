@@ -1,9 +1,11 @@
 """Ingestion asynchrone des études ClinicalTrials.gov.
 
-Brique B2 : pagination d'une partition et écriture en JSON Lines.
+Brique B3 : toutes les partitions en parallèle, limitées par un sémaphore.
+Usage : python scripts/ingest/fetch_studies.py --concurrence 8
 """
 from __future__ import annotations
 
+import argparse
 import asyncio
 import json
 import os
@@ -17,6 +19,11 @@ CONDITION = "breast cancer"
 PAGE_SIZE = 1000
 TIMEOUT = aiohttp.ClientTimeout(total=60)
 RAW_DIR = Path(__file__).resolve().parents[2] / "data" / "raw"
+PARTITIONS = (
+    ["avant_2000"]
+    + [str(annee) for annee in range(2000, 2027)]
+    + ["apres_2026", "sans_date"]
+)
 
 
 def filtre_partition(partition: str) -> str:
@@ -46,7 +53,10 @@ def ecrire_page(chemin: Path, etudes: list[dict]) -> None:
 
 
 async def recuperer_page(
-    session: aiohttp.ClientSession, partition: str, page_token: str | None = None
+    session: aiohttp.ClientSession,
+    semaphore: asyncio.Semaphore,
+    partition: str,
+    page_token: str | None = None,
 ) -> dict:
     """Demande une page d'études d'une partition et renvoie le JSON décodé."""
     params = {
@@ -57,37 +67,57 @@ async def recuperer_page(
     }
     if page_token:
         params["pageToken"] = page_token
-    async with session.get(BASE_URL, params=params) as reponse:
-        reponse.raise_for_status()
-        return await reponse.json()
+    async with semaphore:
+        async with session.get(BASE_URL, params=params) as reponse:
+            reponse.raise_for_status()
+            return await reponse.json()
 
 
-async def collecter_partition(session: aiohttp.ClientSession, partition: str) -> int:
-    """Suit les jetons d'une partition jusqu'à la dernière page. Renvoie le nombre d'études."""
+async def collecter_partition(
+    session: aiohttp.ClientSession, semaphore: asyncio.Semaphore, partition: str
+) -> dict:
+    """Suit les jetons d'une partition jusqu'à la dernière page."""
     numero = 1
     page_token = None
-    total = 0
+    etudes_recues = 0
+    attendu = 0
     while True:
-        donnees = await recuperer_page(session, partition, page_token)
+        donnees = await recuperer_page(session, semaphore, partition, page_token)
+        if numero == 1:
+            attendu = donnees.get("totalCount", 0)
         etudes = donnees["studies"]
-        chemin = nom_fichier(partition, numero)
-        ecrire_page(chemin, etudes)
-        total += len(etudes)
-        print(f"  {chemin.name} : {len(etudes)} études")
+        ecrire_page(nom_fichier(partition, numero), etudes)
+        etudes_recues += len(etudes)
         page_token = donnees.get("nextPageToken")
         if not page_token:
-            return total
+            print(f"  {partition:<11} {etudes_recues:>5} études, {numero} page(s)")
+            return {"partition": partition, "etudes": etudes_recues,
+                    "attendu": attendu, "pages": numero}
         numero += 1
 
 
-async def main() -> None:
+async def main(concurrence: int) -> None:
+    semaphore = asyncio.Semaphore(concurrence)
+    debut = time.perf_counter()
     async with aiohttp.ClientSession(timeout=TIMEOUT) as session:
-        for partition in ("2025", "2020"):
-            debut = time.perf_counter()
-            total = await collecter_partition(session, partition)
-            duree = time.perf_counter() - debut
-            print(f"{partition} : {total} études en {duree:.2f} s")
+        resultats = await asyncio.gather(
+            *(collecter_partition(session, semaphore, p) for p in PARTITIONS)
+        )
+    duree = time.perf_counter() - debut
+
+    etudes = sum(r["etudes"] for r in resultats)
+    attendu = sum(r["attendu"] for r in resultats)
+    pages = sum(r["pages"] for r in resultats)
+    print(f"\nConcurrence : {concurrence}")
+    print(f"Partitions  : {len(resultats)}")
+    print(f"Requêtes    : {pages}")
+    print(f"Études      : {etudes} (attendu {attendu}) -> {'OK' if etudes == attendu else 'ÉCART'}")
+    print(f"Durée       : {duree:.2f} s")
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    parser = argparse.ArgumentParser(description="Ingestion ClinicalTrials.gov")
+    parser.add_argument("--concurrence", type=int, default=8,
+                        help="nombre maximal de requêtes simultanées")
+    args = parser.parse_args()
+    asyncio.run(main(args.concurrence))
