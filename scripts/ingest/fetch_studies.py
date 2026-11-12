@@ -1,6 +1,6 @@
 """Ingestion asynchrone des études ClinicalTrials.gov.
 
-Brique B4 : retries avec attente exponentielle sur les erreurs temporaires.
+ETAPE 5 : checkpoint et reprise après interruption.
 Usage : python scripts/ingest/fetch_studies.py --concurrence 8
 Test  : python scripts/ingest/fetch_studies.py --taux-echec 0.3
 """
@@ -20,7 +20,9 @@ BASE_URL = "https://clinicaltrials.gov/api/v2/studies"
 CONDITION = "breast cancer"
 PAGE_SIZE = 1000
 TIMEOUT = aiohttp.ClientTimeout(total=60)
-RAW_DIR = Path(__file__).resolve().parents[2] / "data" / "raw"
+RACINE = Path(__file__).resolve().parents[2]
+RAW_DIR = RACINE / "data" / "raw"
+CHECKPOINT = RACINE / "checkpoint.json"
 PARTITIONS = (
     ["avant_2000"]
     + [str(annee) for annee in range(2000, 2027)]
@@ -61,6 +63,26 @@ def ecrire_page(chemin: Path, etudes: list[dict]) -> None:
         for etude in etudes:
             fichier.write(json.dumps(etude, ensure_ascii=False) + "\n")
     os.replace(temporaire, chemin)
+
+
+def ecrire_json_atomique(chemin: Path, contenu: dict) -> None:
+    """Écrit un fichier JSON via un fichier temporaire renommé à la fin."""
+    temporaire = chemin.with_suffix(".json.tmp")
+    temporaire.write_text(json.dumps(contenu, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(temporaire, chemin)
+
+
+def charger_checkpoint() -> dict:
+    """Renvoie l'état sauvegardé de chaque partition, ou un dictionnaire vide."""
+    if CHECKPOINT.exists():
+        return json.loads(CHECKPOINT.read_text(encoding="utf-8"))
+    return {}
+
+
+def nettoyer_raw() -> None:
+    """Supprime les pages d'une ancienne collecte avant d'en commencer une nouvelle."""
+    for fichier in list(RAW_DIR.glob("*_page_*.jsonl")) + list(RAW_DIR.glob("*.tmp")):
+        fichier.unlink()
 
 
 def delai_attente(tentative: int) -> float:
@@ -120,12 +142,22 @@ async def collecter_partition(
     semaphore: asyncio.Semaphore,
     partition: str,
     taux_echec: float,
+    etat: dict,
 ) -> dict:
-    """Suit les jetons d'une partition jusqu'à la dernière page."""
-    numero = 1
-    page_token = None
-    etudes_recues = 0
-    attendu = 0
+    """Suit les jetons d'une partition jusqu'à la dernière page, en reprenant si besoin."""
+    sauvegarde = etat.get(partition)
+    if sauvegarde and sauvegarde["statut"] == "terminee":
+        print(f"  {partition:<11} déjà terminée, ignorée")
+        return sauvegarde
+    if sauvegarde:
+        numero = sauvegarde["pages"] + 1
+        page_token = sauvegarde["prochain_token"]
+        etudes_recues = sauvegarde["etudes"]
+        attendu = sauvegarde["attendu"]
+        print(f"  {partition:<11} reprise à la page {numero}")
+    else:
+        numero, page_token, etudes_recues, attendu = 1, None, 0, 0
+
     while True:
         donnees = await recuperer_page(session, semaphore, partition, page_token, taux_echec)
         if numero == 1:
@@ -134,19 +166,33 @@ async def collecter_partition(
         ecrire_page(nom_fichier(partition, numero), etudes)
         etudes_recues += len(etudes)
         page_token = donnees.get("nextPageToken")
+        etat[partition] = {
+            "statut": "en_cours" if page_token else "terminee",
+            "pages": numero,
+            "prochain_token": page_token,
+            "etudes": etudes_recues,
+            "attendu": attendu,
+        }
+        ecrire_json_atomique(CHECKPOINT, etat)
         if not page_token:
             print(f"  {partition:<11} {etudes_recues:>5} études, {numero} page(s)")
-            return {"partition": partition, "etudes": etudes_recues,
-                    "attendu": attendu, "pages": numero}
+            return etat[partition]
         numero += 1
 
 
 async def main(concurrence: int, taux_echec: float) -> None:
+    etat = charger_checkpoint()
+    if etat:
+        terminees = sum(1 for p in etat.values() if p["statut"] == "terminee")
+        print(f"Reprise d'une collecte interrompue : {terminees} partition(s) déjà terminée(s)")
+    else:
+        nettoyer_raw()
+        print("Nouvelle collecte")
     semaphore = asyncio.Semaphore(concurrence)
     debut = time.perf_counter()
     async with aiohttp.ClientSession(timeout=TIMEOUT) as session:
         resultats = await asyncio.gather(
-            *(collecter_partition(session, semaphore, p, taux_echec) for p in PARTITIONS)
+            *(collecter_partition(session, semaphore, p, taux_echec, etat) for p in PARTITIONS)
         )
     duree = time.perf_counter() - debut
 
@@ -160,6 +206,10 @@ async def main(concurrence: int, taux_echec: float) -> None:
     print(f"Études      : {etudes} (attendu {attendu}) -> {'OK' if etudes == attendu else 'ÉCART'}")
     print(f"Durée       : {duree:.2f} s")
 
+    if etudes == attendu:
+        CHECKPOINT.unlink()
+        print("Collecte complète : checkpoint supprimé")
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Ingestion ClinicalTrials.gov")
@@ -168,4 +218,7 @@ if __name__ == "__main__":
     parser.add_argument("--taux-echec", type=float, default=0.0,
                         help="test : proportion de requêtes qui échouent volontairement (0 à 1)")
     args = parser.parse_args()
-    asyncio.run(main(args.concurrence, args.taux_echec))
+    try:
+        asyncio.run(main(args.concurrence, args.taux_echec))
+    except KeyboardInterrupt:
+        print("\nInterrompu. Relancez la même commande pour reprendre.")
