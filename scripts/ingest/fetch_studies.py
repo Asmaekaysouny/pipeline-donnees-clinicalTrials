@@ -1,6 +1,6 @@
 """Ingestion asynchrone des études ClinicalTrials.gov.
 
-ETAPE 5 : checkpoint et reprise après interruption.
+ETAPE 6 : manifeste de la collecte et date de traitement des données.
 Usage : python scripts/ingest/fetch_studies.py --concurrence 8
 Test  : python scripts/ingest/fetch_studies.py --taux-echec 0.3
 """
@@ -12,17 +12,20 @@ import json
 import os
 import random
 import time
+from datetime import datetime
 from pathlib import Path
 
 import aiohttp
 
 BASE_URL = "https://clinicaltrials.gov/api/v2/studies"
+VERSION_URL= "https://clinicaltrials.gov/api/v2/version"
 CONDITION = "breast cancer"
 PAGE_SIZE = 1000
 TIMEOUT = aiohttp.ClientTimeout(total=60)
 RACINE = Path(__file__).resolve().parents[2]
 RAW_DIR = RACINE / "data" / "raw"
 CHECKPOINT = RACINE / "checkpoint.json"
+MANIFESTE = RAW_DIR / "manifest.json"
 PARTITIONS = (
     ["avant_2000"]
     + [str(annee) for annee in range(2000, 2027)]
@@ -83,6 +86,15 @@ def nettoyer_raw() -> None:
     """Supprime les pages d'une ancienne collecte avant d'en commencer une nouvelle."""
     for fichier in list(RAW_DIR.glob("*_page_*.jsonl")) + list(RAW_DIR.glob("*.tmp")):
         fichier.unlink()
+    if MANIFESTE.exists():
+        MANIFESTE.unlink()
+
+
+async def lire_version(session: aiohttp.ClientSession) -> dict:
+    """Renvoie la version de l'API et la date de traitement des données (dataTimestamp)."""
+    async with session.get(VERSION_URL) as reponse:
+        reponse.raise_for_status()
+        return await reponse.json(content_type=None)
 
 
 def delai_attente(tentative: int) -> float:
@@ -167,6 +179,7 @@ async def collecter_partition(
         etudes_recues += len(etudes)
         page_token = donnees.get("nextPageToken")
         etat[partition] = {
+            "partition": partition,
             "statut": "en_cours" if page_token else "terminee",
             "pages": numero,
             "prochain_token": page_token,
@@ -182,15 +195,21 @@ async def collecter_partition(
 
 async def main(concurrence: int, taux_echec: float) -> None:
     etat = charger_checkpoint()
-    if etat:
-        terminees = sum(1 for p in etat.values() if p["statut"] == "terminee")
-        print(f"Reprise d'une collecte interrompue : {terminees} partition(s) déjà terminée(s)")
-    else:
-        nettoyer_raw()
-        print("Nouvelle collecte")
-    semaphore = asyncio.Semaphore(concurrence)
     debut = time.perf_counter()
     async with aiohttp.ClientSession(timeout=TIMEOUT) as session:
+        if etat:
+            terminees = sum(1 for p in PARTITIONS if etat.get(p, {}).get("statut") == "terminee")
+            print(f"Reprise d'une collecte interrompue : {terminees} partition(s) déjà terminée(s)")
+        else:
+            nettoyer_raw()
+            version = await lire_version(session)
+            etat["_collecte"] = {
+                "collecte_debut": datetime.now().astimezone().isoformat(timespec="seconds"),
+                "data_timestamp": version["dataTimestamp"],
+                "api_version": version["apiVersion"],
+            }
+            print(f"Nouvelle collecte (données traitées par ClinicalTrials.gov le {version['dataTimestamp']})")
+        semaphore = asyncio.Semaphore(concurrence)
         resultats = await asyncio.gather(
             *(collecter_partition(session, semaphore, p, taux_echec, etat) for p in PARTITIONS)
         )
@@ -207,10 +226,19 @@ async def main(concurrence: int, taux_echec: float) -> None:
     print(f"Durée       : {duree:.2f} s")
 
     if etudes == attendu:
+        manifeste = {
+            "source": "ClinicalTrials.gov, API v2",
+            "condition": CONDITION,
+            **etat["_collecte"],
+            "collecte_fin": datetime.now().astimezone().isoformat(timespec="seconds"),
+            "partitions": {r["partition"]: r["etudes"] for r in resultats},
+            "pages": pages,
+            "total_attendu": attendu,
+            "total_collecte": etudes,
+        }
+        ecrire_json_atomique(MANIFESTE, manifeste)
         CHECKPOINT.unlink()
-        print("Collecte complète : checkpoint supprimé")
-
-
+        print(f"Collecte complète : manifeste écrit dans {MANIFESTE.name}, checkpoint supprimé")
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Ingestion ClinicalTrials.gov")
     parser.add_argument("--concurrence", type=int, default=8,
