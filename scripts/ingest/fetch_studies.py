@@ -1,7 +1,8 @@
 """Ingestion asynchrone des études ClinicalTrials.gov.
 
-Brique B3 : toutes les partitions en parallèle, limitées par un sémaphore.
+Brique B4 : retries avec attente exponentielle sur les erreurs temporaires.
 Usage : python scripts/ingest/fetch_studies.py --concurrence 8
+Test  : python scripts/ingest/fetch_studies.py --taux-echec 0.3
 """
 from __future__ import annotations
 
@@ -9,6 +10,7 @@ import argparse
 import asyncio
 import json
 import os
+import random
 import time
 from pathlib import Path
 
@@ -24,6 +26,15 @@ PARTITIONS = (
     + [str(annee) for annee in range(2000, 2027)]
     + ["apres_2026", "sans_date"]
 )
+
+MAX_TENTATIVES = 5
+DELAI_BASE = 1.0
+CODES_TEMPORAIRES = {429, 500, 502, 503, 504}
+STATS = {"tentatives": 0, "retries": 0}
+
+
+class ErreurTemporaire(Exception):
+    """Erreur qui vaut la peine d'être retentée (serveur saturé, panne passagère)."""
 
 
 def filtre_partition(partition: str) -> str:
@@ -52,11 +63,45 @@ def ecrire_page(chemin: Path, etudes: list[dict]) -> None:
     os.replace(temporaire, chemin)
 
 
+def delai_attente(tentative: int) -> float:
+    """Attente exponentielle : 1 s, 2 s, 4 s, 8 s, plus un peu d'aléatoire (jitter)."""
+    return DELAI_BASE * 2 ** (tentative - 1) + random.uniform(0, 0.5)
+
+
+async def requete_api(
+    session: aiohttp.ClientSession,
+    semaphore: asyncio.Semaphore,
+    params: dict,
+    taux_echec: float,
+) -> dict:
+    """Fait la requête, et la retente en cas d'erreur temporaire."""
+    for tentative in range(1, MAX_TENTATIVES + 1):
+        try:
+            async with semaphore:
+                STATS["tentatives"] += 1
+                if random.random() < taux_echec:
+                    raise ErreurTemporaire("erreur simulée")
+                async with session.get(BASE_URL, params=params) as reponse:
+                    if reponse.status in CODES_TEMPORAIRES:
+                        raise ErreurTemporaire(f"HTTP {reponse.status}")
+                    reponse.raise_for_status()
+                    return await reponse.json()
+        except (ErreurTemporaire, aiohttp.ClientConnectionError, asyncio.TimeoutError) as erreur:
+            if tentative == MAX_TENTATIVES:
+                raise
+            attente = delai_attente(tentative)
+            STATS["retries"] += 1
+            print(f"    nouvelle tentative dans {attente:.1f} s ({erreur or type(erreur).__name__})")
+            await asyncio.sleep(attente)
+    raise RuntimeError("inatteignable")
+
+
 async def recuperer_page(
     session: aiohttp.ClientSession,
     semaphore: asyncio.Semaphore,
     partition: str,
-    page_token: str | None = None,
+    page_token: str | None,
+    taux_echec: float,
 ) -> dict:
     """Demande une page d'études d'une partition et renvoie le JSON décodé."""
     params = {
@@ -67,14 +112,14 @@ async def recuperer_page(
     }
     if page_token:
         params["pageToken"] = page_token
-    async with semaphore:
-        async with session.get(BASE_URL, params=params) as reponse:
-            reponse.raise_for_status()
-            return await reponse.json()
+    return await requete_api(session, semaphore, params, taux_echec)
 
 
 async def collecter_partition(
-    session: aiohttp.ClientSession, semaphore: asyncio.Semaphore, partition: str
+    session: aiohttp.ClientSession,
+    semaphore: asyncio.Semaphore,
+    partition: str,
+    taux_echec: float,
 ) -> dict:
     """Suit les jetons d'une partition jusqu'à la dernière page."""
     numero = 1
@@ -82,7 +127,7 @@ async def collecter_partition(
     etudes_recues = 0
     attendu = 0
     while True:
-        donnees = await recuperer_page(session, semaphore, partition, page_token)
+        donnees = await recuperer_page(session, semaphore, partition, page_token, taux_echec)
         if numero == 1:
             attendu = donnees.get("totalCount", 0)
         etudes = donnees["studies"]
@@ -96,12 +141,12 @@ async def collecter_partition(
         numero += 1
 
 
-async def main(concurrence: int) -> None:
+async def main(concurrence: int, taux_echec: float) -> None:
     semaphore = asyncio.Semaphore(concurrence)
     debut = time.perf_counter()
     async with aiohttp.ClientSession(timeout=TIMEOUT) as session:
         resultats = await asyncio.gather(
-            *(collecter_partition(session, semaphore, p) for p in PARTITIONS)
+            *(collecter_partition(session, semaphore, p, taux_echec) for p in PARTITIONS)
         )
     duree = time.perf_counter() - debut
 
@@ -110,7 +155,8 @@ async def main(concurrence: int) -> None:
     pages = sum(r["pages"] for r in resultats)
     print(f"\nConcurrence : {concurrence}")
     print(f"Partitions  : {len(resultats)}")
-    print(f"Requêtes    : {pages}")
+    print(f"Pages       : {pages}")
+    print(f"Tentatives  : {STATS['tentatives']} (dont {STATS['retries']} retries)")
     print(f"Études      : {etudes} (attendu {attendu}) -> {'OK' if etudes == attendu else 'ÉCART'}")
     print(f"Durée       : {duree:.2f} s")
 
@@ -119,5 +165,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Ingestion ClinicalTrials.gov")
     parser.add_argument("--concurrence", type=int, default=8,
                         help="nombre maximal de requêtes simultanées")
+    parser.add_argument("--taux-echec", type=float, default=0.0,
+                        help="test : proportion de requêtes qui échouent volontairement (0 à 1)")
     args = parser.parse_args()
-    asyncio.run(main(args.concurrence))
+    asyncio.run(main(args.concurrence, args.taux_echec))
