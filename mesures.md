@@ -67,10 +67,10 @@ Choix : par année de début (+ avant 2000, après 2026, sans date).
 
 ## Ingestion
 - Date de traitement des données par ClinicalTrials.gov :
-- Durée de la collecte complète :
-- Nombre de requêtes :
-- Nombre d'études collectées :
-- Volume de data/raw/ :
+- Durée de la collecte complète : 6,04 s (concurrence 8), mesuré le 12/11/2026 
+- Nombre de requêtes : 35
+- Nombre d'études collectées : 17009
+- Volume de data/raw/ : 376 Mo (35 fichiers)
 - Nombre de retries :
-- Durée en séquentiel (échantillon) :
-- Gain de l'asynchrone :
+- Durée en séquentiel (concurrence 1, collecte complète) : 28,49 s
+- Gain de l'asynchrone : environ 4,7 fois plus rapide (28,49 s → 6,04 s)
