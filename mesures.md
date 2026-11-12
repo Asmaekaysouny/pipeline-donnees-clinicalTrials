@@ -71,6 +71,6 @@ Choix : par année de début (+ avant 2000, après 2026, sans date).
 - Nombre de requêtes : 35
 - Nombre d'études collectées : 17009
 - Volume de data/raw/ : 376 Mo (35 fichiers)
-- Nombre de retries :
+- Nombre de retries : 0 en conditions normales ; test à 30 % de pannes simulées : 13 retries sur 48 tentatives, 17 009 études récupérées sur 17 009 (7,71 s)
 - Durée en séquentiel (concurrence 1, collecte complète) : 28,49 s
 - Gain de l'asynchrone : environ 4,7 fois plus rapide (28,49 s → 6,04 s)
