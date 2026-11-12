@@ -25,7 +25,7 @@ TIMEOUT = aiohttp.ClientTimeout(total=60)
 RACINE = Path(__file__).resolve().parents[2]
 RAW_DIR = RACINE / "data" / "raw"
 CHECKPOINT = RACINE / "checkpoint.json"
-MANIFESTE = RAW_DIR / "manifest.json"
+MANIFESTE = RAW_DIR / "_manifest.json"
 PARTITIONS = (
     ["avant_2000"]
     + [str(annee) for annee in range(2000, 2027)]
