@@ -1,4 +1,4 @@
-﻿"""Transformation : data/raw/**/page_*.jsonl -> data/processed/studies.parquet
+﻿"""Transformation : data/raw/*_page_*.jsonl -> data/processed/studies.parquet
 
 Lecture par lots (une page à la fois), nettoyage et typage selon docs/contrat_donnees.md.
 Seul l'ensemble des nct_id déjà vus est gardé en mémoire (déduplication).
@@ -7,6 +7,7 @@ import argparse
 import json
 import os
 import re
+import sys
 import time
 from datetime import date
 from pathlib import Path
@@ -122,13 +123,16 @@ def flatten_study(study):
 
 
 def peak_memory_mb():
-    """Pic de mémoire du processus (Mo). Nécessite psutil."""
+    """Pic de mémoire du processus depuis son lancement (Mo)."""
     try:
+        import resource
+    except ImportError:  # Windows : pas de module resource
         import psutil
-        info = psutil.Process().memory_info()
-        return round(getattr(info, "peak_wset", info.rss) / 1e6, 1)
-    except ImportError:
-        return None
+        return round(psutil.Process().memory_info().peak_wset / 1e6, 1)
+    pic = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    if sys.platform != "darwin":  # Linux compte en kilo-octets, macOS en octets
+        pic *= 1024
+    return round(pic / 1e6, 1)
 
 
 def main(args):
@@ -143,7 +147,7 @@ def main(args):
     start = time.perf_counter()
 
     with pq.ParquetWriter(tmp_path, SCHEMA, compression="snappy") as writer:
-        for page in sorted(raw_dir.rglob("page_*.jsonl")):
+        for page in sorted(raw_dir.glob("*_page_*.jsonl")):
             rows = []
             with page.open(encoding="utf-8") as f:
                 for line in f:
@@ -167,6 +171,14 @@ def main(args):
     stats["duree_s"] = round(time.perf_counter() - start, 1)
     stats["ram_max_mo"] = peak_memory_mb()
     stats["parquet_mo"] = round(out_path.stat().st_size / 1e6, 1)
+    manifeste = raw_dir / "_manifest.json"
+    if manifeste.exists():
+        infos = json.loads(manifeste.read_text(encoding="utf-8"))
+        stats["total_attendu"] = infos["total_attendu"]
+        stats["controle_total"] = "OK" if stats["lignes_lues"] == infos["total_attendu"] else "ÉCART"
+        stats["data_timestamp"] = infos["data_timestamp"]
+    else:
+        stats["controle_total"] = "manifeste absent"
     print(json.dumps(stats, indent=2))
 
 
