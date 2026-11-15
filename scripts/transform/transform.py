@@ -171,6 +171,14 @@ def main(args):
     stats["duree_s"] = round(time.perf_counter() - start, 1)
     stats["ram_max_mo"] = peak_memory_mb()
     stats["parquet_mo"] = round(out_path.stat().st_size / 1e6, 1)
+    manifeste = raw_dir / "_manifest.json"
+    if manifeste.exists():
+        infos = json.loads(manifeste.read_text(encoding="utf-8"))
+        stats["total_attendu"] = infos["total_attendu"]
+        stats["controle_total"] = "OK" if stats["lignes_lues"] == infos["total_attendu"] else "ÉCART"
+        stats["data_timestamp"] = infos["data_timestamp"]
+    else:
+        stats["controle_total"] = "manifeste absent"
     print(json.dumps(stats, indent=2))
 
 
