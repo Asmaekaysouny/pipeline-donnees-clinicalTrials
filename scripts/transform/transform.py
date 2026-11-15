@@ -1,4 +1,4 @@
-﻿"""Transformation : data/raw/**/page_*.jsonl -> data/processed/studies.parquet
+﻿"""Transformation : data/raw/**/*_page_*.jsonl -> data/processed/studies.parquet
 
 Lecture par lots (une page à la fois), nettoyage et typage selon docs/contrat_donnees.md.
 Seul l'ensemble des nct_id déjà vus est gardé en mémoire (déduplication).
@@ -143,7 +143,7 @@ def main(args):
     start = time.perf_counter()
 
     with pq.ParquetWriter(tmp_path, SCHEMA, compression="snappy") as writer:
-        for page in sorted(raw_dir.rglob("page_*.jsonl")):
+        for page in sorted(raw_dir.glob("*_page_*.jsonl")):
             rows = []
             with page.open(encoding="utf-8") as f:
                 for line in f:
