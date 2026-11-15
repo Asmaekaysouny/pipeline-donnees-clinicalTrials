@@ -4,6 +4,7 @@ Lecture par lots (une page à la fois), nettoyage et typage selon docs/contrat_d
 Seul l'ensemble des nct_id déjà vus est gardé en mémoire (déduplication).
 """
 import argparse
+import sys
 import json
 import os
 import re
@@ -122,13 +123,16 @@ def flatten_study(study):
 
 
 def peak_memory_mb():
-    """Pic de mémoire du processus (Mo). Nécessite psutil."""
+    """Pic de mémoire du processus depuis son lancement (Mo)."""
     try:
+        import resource
+    except ImportError:  # Windows : pas de module resource
         import psutil
-        info = psutil.Process().memory_info()
-        return round(getattr(info, "peak_wset", info.rss) / 1e6, 1)
-    except ImportError:
-        return None
+        return round(psutil.Process().memory_info().peak_wset / 1e6, 1)
+    pic = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    if sys.platform != "darwin":  # Linux compte en kilo-octets, macOS en octets
+        pic *= 1024
+    return round(pic / 1e6, 1)
 
 
 def main(args):
