@@ -32,12 +32,14 @@
 - Études sans identifiant ou sans titre écartées
 - Date de traitement des données par ClinicalTrials.gov : remplie à la collecte complète (champ data_timestamp de data/raw/_manifest.json)
 
-## Transformation
-- Durée :
-- RAM maximale :
-- Lignes en entrée :
-- Lignes en sortie :
-
+## Transformation (mesuré le 2026-11-15)
+- Durée : 8,4 s au premier lancement (lecture sur disque), environ 1,8 s en relance (fichiers en cache)
+- RAM maximale : 134,8 Mo pour 376 Mo de données brutes (lecture par lots, une page à la fois)
+- Lignes en entrée : 17 009 (35 fichiers)
+- Lignes en sortie : 17 009 (0 étude écartée, 0 doublon)
+- Contrôle avec le manifeste : 17 009 lues / 17 009 attendues -> OK
+- Taille du Parquet : 1,9 Mo (15 colonnes typées, compression snappy)
+- Tests : 12 tests pytest, dont un test de bout en bout sur des fichiers nommés comme ceux de l'ingestion
 ## Base SQL
 - Temps avant index :
 - Temps après index :
@@ -66,7 +68,7 @@ Choix : par année de début (+ avant 2000, après 2026, sans date).
 - La date de début ne change pas pendant la collecte, contrairement au statut.
 
 ## Ingestion
-- Date de traitement des données par ClinicalTrials.gov :
+- Date de traitement des données par ClinicalTrials.gov : - Date de traitement des données par ClinicalTrials.gov : 2026-11-12 à 10:00:05 (champ data_timestamp de data/raw/_manifest.json, collecte du 12/11/2026 à 17:26)
 - Durée de la collecte complète : 6,04 s (concurrence 8), mesuré le 12/11/2026 
 - Nombre de requêtes : 35
 - Nombre d'études collectées : 17009

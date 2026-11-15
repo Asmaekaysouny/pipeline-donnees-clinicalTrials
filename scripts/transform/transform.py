@@ -1,13 +1,13 @@
-﻿"""Transformation : data/raw/**/*_page_*.jsonl -> data/processed/studies.parquet
+﻿"""Transformation : data/raw/*_page_*.jsonl -> data/processed/studies.parquet
 
 Lecture par lots (une page à la fois), nettoyage et typage selon docs/contrat_donnees.md.
 Seul l'ensemble des nct_id déjà vus est gardé en mémoire (déduplication).
 """
 import argparse
-import sys
 import json
 import os
 import re
+import sys
 import time
 from datetime import date
 from pathlib import Path

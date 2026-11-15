@@ -1,7 +1,14 @@
-﻿from datetime import date
+﻿import argparse
+import json
+import shutil
+from datetime import date
+from pathlib import Path
 
-from scripts.transform.transform import flatten_study, parse_date, parse_min_age
+import pyarrow.parquet as pq
 
+from scripts.transform.transform import flatten_study, main, parse_date, parse_min_age
+
+FIXTURE = Path(__file__).parent / "fixtures" / "sample_page.jsonl"
 
 def test_parse_date_partielle_completee_au_1er():
     assert parse_date("2020-03") == date(2020, 3, 1)
@@ -99,3 +106,20 @@ def test_flatten_enrollment_invalide():
     etude = _etude_complete()
     etude["protocolSection"]["designModule"]["enrollmentInfo"]["count"] = -5
     assert flatten_study(etude)["enrollment"] is None
+
+
+def test_main_lit_les_fichiers_nommes_par_l_ingestion(tmp_path, capsys):
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    shutil.copy(FIXTURE, raw / "2025_page_00001.jsonl")
+    (raw / "_manifest.json").write_text(
+        '{"total_attendu": 100, "data_timestamp": "2026-11-12T10:00:05"}', encoding="utf-8"
+    )
+    sortie = tmp_path / "studies.parquet"
+
+    main(argparse.Namespace(raw_dir=str(raw), out=str(sortie)))
+
+    assert pq.read_table(sortie).num_rows == 100
+    bilan = json.loads(capsys.readouterr().out)
+    assert bilan["fichiers"] == 1
+    assert bilan["controle_total"] == "OK"
