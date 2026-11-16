@@ -147,7 +147,7 @@ def main(args):
     start = time.perf_counter()
 
     with pq.ParquetWriter(tmp_path, SCHEMA, compression="snappy") as writer:
-        for page in sorted(raw_dir.glob("*_page_*.jsonl")):
+        for page in sorted(set(raw_dir.glob("*_page_*.jsonl")) | set(raw_dir.rglob("page_*.jsonl"))):
             rows = []
             with page.open(encoding="utf-8") as f:
                 for line in f:
@@ -187,3 +187,4 @@ if __name__ == "__main__":
     p.add_argument("--raw-dir", default="data/raw")
     p.add_argument("--out", default="data/processed/studies.parquet")
     main(p.parse_args())
+
