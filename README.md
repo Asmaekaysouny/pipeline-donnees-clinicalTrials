@@ -1,4 +1,4 @@
-# Pipeline de données : ClinicalTrials.gov
+﻿# Pipeline de données : ClinicalTrials.gov
 
 Pipeline complet de collecte, de transformation, de stockage SQL et de publication de 610 511 études cliniques issues de l'API v2 de ClinicalTrials.gov.
 
@@ -73,6 +73,8 @@ python -m pytest tests -v
 - Ingestion : options `--only y2020 y2021`, `--max-pages`, `--raw-dir`. Après une interruption, relancer la même commande reprend à la page suivante de chaque flux.
 - Une seconde version de l'ingestion, avec manifeste, se trouve dans `scripts/ingest/fetch_studies.py` (voir son en-tête et `mesures.md`).
 - Le chargement SQL est idempotent : le relancer n'ajoute aucun doublon.
+- `sql/requetes.sql` contient les 5 requêtes d'analyse du projet ; `sql/queries.sql` regroupe des requêtes complémentaires (par exemple études par statut, conditions les plus fréquentes).
+- La transformation lit les fichiers bruts des deux ingestions (`data/raw/<flux>/page_*.jsonl` ou `data/raw/*_page_*.jsonl`). Le contrôle du total avec `_manifest.json` n'est actif qu'avec `fetch_studies.py` ; sinon le résumé indique « manifeste absent ».
 - La publication refuse d'envoyer un Parquet de moins de 100 000 lignes.
 
 ## Résultats mesurés
@@ -105,3 +107,4 @@ Hugging Face Hub : https://huggingface.co/datasets/Asmae04/clinicaltrials-studie
 ## Équipe
 
 Asmae Kaysouny et Majda Bashir (voir l'historique Git pour le détail des contributions).
+
